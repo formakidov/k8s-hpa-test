@@ -1,0 +1,84 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: load-test-app-deployment
+  labels:
+    app: load-test-app
+spec:
+  replicas: 1 # Start with 1 replica
+  selector:
+    matchLabels:
+      app: load-test-app
+  template:
+    metadata:
+      labels:
+        app: load-test-app
+    spec:
+      # terminationGracePeriodSeconds: 30 # Default, can be increased if needed
+      containers:
+      - name: load-test-app-container
+        image: load-test-app:latest # Image built locally
+        imagePullPolicy: IfNotPresent # Use local image if available
+        ports:
+        - containerPort: 8080 # App listens on this port inside the container
+        resources:
+          requests: # Resources the HPA will base its scaling decision on (target 50% of this)
+            cpu: "250m" # 0.25 CPU core
+            memory: "128Mi"
+          limits:   # Max resources the pod can consume
+            cpu: "500m" # 0.5 CPU core
+            memory: "256Mi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: load-test-app-service
+  labels:
+    app: load-test-app
+spec:
+  selector:
+    app: load-test-app
+  ports:
+    - protocol: TCP
+      port: 80       # Service port within the cluster
+      targetPort: 8080 # Port on the pods to forward to
+  type: NodePort     # Exposes the service on each Node's IP at a static port
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: load-test-app-hpa
+  labels:
+    app: load-test-app
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: load-test-app-deployment # Target deployment for scaling
+  minReplicas: 1
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        # HPA scales up if average CPU utilization > 50% of requested CPU (i.e., >125m with 250m request)
+        averageUtilization: 50
+  behavior: # Fine-tune scaling behavior for faster response in testing
+    scaleDown:
+      stabilizationWindowSeconds: 30 # Wait 30s before scaling down
+      policies:
+      - type: Percent
+        value: 100
+        periodSeconds: 15
+    scaleUp:
+      stabilizationWindowSeconds: 0 # Scale up immediately
+      policies:
+      - type: Percent
+        value: 100
+        periodSeconds: 15
+      - type: Pods
+        value: 4 # Allow adding up to 4 pods at once
+        periodSeconds: 15
+      selectPolicy: Max
